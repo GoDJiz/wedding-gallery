@@ -183,10 +183,14 @@ async function fetchDriveImages({ folderId, apiKey, pageToken, pageSize, orderBy
 const ALBUMS_URL = 'albums.json';
 const GALLERY_CONFIG_OVERRIDE_KEY = 'lumina-gallery-config-override';
 
-// Accepts a full Drive folder URL or a bare folder ID
+// Accepts a full Drive folder URL or a bare folder ID. Rejects
+// leftover placeholder text (e.g. "YOUR_GOOGLE_DRIVE_FOLDER_ID")
+// so an unconfigured field can never be mistaken for a real ID and
+// sent to the Drive API.
 function extractFolderId(input) {
   if (!input) return null;
   const trimmed = String(input).trim();
+  if (/^YOUR_/i.test(trimmed)) return null;
   const match = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (match) return match[1];
   if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
@@ -235,8 +239,21 @@ async function loadGalleryConfig() {
     console.warn('[Lumina] Ignoring corrupt gallery config override in localStorage', err);
   }
 
+  // NOTE on imageCount / cover: albums.json may carry an `imageCount`
+  // and a `cover` written by /admin the last time someone clicked
+  // Save (see admin.js → validateAlbumFolder). Those are point-in-time
+  // snapshots of what Drive returned *then* — they can drift the
+  // moment someone adds/removes/reorders photos in Drive directly.
+  // Google Drive is always the source of truth for counts, so the
+  // stale `imageCount` field is dropped right here — every album
+  // photo count the gallery ever displays comes from
+  // computeAlbumCounts(), computed fresh from the images this exact
+  // page load just fetched (see finishBootstrap()). `cover` is left
+  // on the album object for now since nothing in the gallery renders
+  // it yet (see README → Future Enhancements); if that ever changes,
+  // it must be re-validated against Drive rather than trusted as-is.
   albums = albums
-    .map(a => ({ ...a, folderId: extractFolderId(a.folderUrl) }))
+    .map(({ imageCount, ...a }) => ({ ...a, folderId: extractFolderId(a.folderUrl) }))
     .filter(a => a.folderId)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
@@ -548,11 +565,14 @@ const state = {
   lbRenderToken: 0,
 };
 
-function isDemoCredentials() {
-  return (
-    !CONFIG.FOLDER_ID || CONFIG.FOLDER_ID === 'YOUR_GOOGLE_DRIVE_FOLDER_ID' ||
-    !CONFIG.API_KEY   || CONFIG.API_KEY   === 'YOUR_GOOGLE_API_KEY'
-  );
+// Demo mode should only ever trigger because there's no way to make
+// a real Drive request at all (no usable API key) — never because of
+// CONFIG.FOLDER_ID specifically, since that field is only a legacy
+// fallback for pre-albums.json deployments (see loadGalleryConfig).
+// Whether any *album* actually resolves to a usable folder is decided
+// separately, after loadGalleryConfig() runs — see bootstrapGallery().
+function isApiKeyMissing() {
+  return !CONFIG.API_KEY || /^YOUR_/i.test(String(CONFIG.API_KEY).trim());
 }
 
 // ────────────────────────────────────────────────────────────
@@ -991,18 +1011,26 @@ async function bootstrapGallery() {
   DOM.galleryGrid.classList.add('hidden');
   DOM.errorBanner.classList.add('hidden');
 
-  // Demo mode — no Drive calls, no albums.json fetch needed.
-  if (isDemoCredentials()) {
-    state.isDemoMode = true;
-    const config = buildDemoData();
-    finishBootstrap(config);
-    DOM.demoBanner.classList.remove('hidden');
-    DOM.demoBadge.classList.remove('hidden');
-    return;
-  }
-
   try {
-    const config = await loadGalleryConfig();
+    // albums.json (the real source of truth) is always consulted
+    // first — even if CONFIG.FOLDER_ID in config.js is still a
+    // placeholder, valid albums configured via /admin must still
+    // load normally. Skip the network round-trip only when there's
+    // no API key at all, since no Drive call could succeed anyway.
+    const config = isApiKeyMissing() ? { albums: [] } : await loadGalleryConfig();
+
+    if (isApiKeyMissing() || config.albums.length === 0) {
+      // True demo mode: nothing real is configured yet (fresh clone,
+      // or an API key hasn't been set). Completely separate code
+      // path from the real fetch below — never runs alongside it,
+      // and never triggered merely because a legacy field is unset.
+      state.isDemoMode = true;
+      finishBootstrap(buildDemoData());
+      DOM.demoBanner.classList.remove('hidden');
+      DOM.demoBadge.classList.remove('hidden');
+      return;
+    }
+
     config.images = await fetchAllAlbumsData(config.albums);
     finishBootstrap(config);
   } catch (err) {

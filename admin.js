@@ -16,6 +16,7 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 function extractFolderId(input) {
   if (!input) return null;
   const trimmed = String(input).trim();
+  if (/^YOUR_/i.test(trimmed)) return null;
   const match = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (match) return match[1];
   if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
@@ -169,8 +170,8 @@ function renderRow(album) {
   row.dataset.id = album.id;
 
   const countLabel = typeof album.imageCount === 'number'
-    ? `${album.imageCount.toLocaleString()} photo${album.imageCount === 1 ? '' : 's'}`
-    : '';
+    ? `${album.imageCount.toLocaleString()} photo${album.imageCount === 1 ? '' : 's'} as of last save`
+    : 'Not yet validated — click Save to check this folder';
 
   row.innerHTML = `
     <div class="album-row-main">
@@ -236,6 +237,13 @@ function addAlbum() {
 
 // ────────────────────────────────────────────────────────────
 //  Save — validate folders, count images, detect cover, persist
+//
+//  imageCount and cover written here are a snapshot of what Drive
+//  returned at the moment Save was clicked — not a live value. The
+//  gallery (app.js) never reads these back for its own counts; it
+//  always recomputes counts from a fresh Drive fetch on every page
+//  load. These fields exist so this admin page has something to
+//  show/export between saves, not as a cache the gallery trusts.
 // ────────────────────────────────────────────────────────────
 
 function setStatus(msg, isError) {
