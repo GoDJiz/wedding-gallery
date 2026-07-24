@@ -51,5 +51,5 @@ const CONFIG = {
   // server to keep secrets on) — anyone who views this file's
   // source can read it. It keeps casual visitors out of the admin
   // UI, it is not real access control. Don't reuse a real password.
-  ADMIN_PASSWORD: 'change-me',
+  ADMIN_PASSWORD: 'Daruma@08',
 }
