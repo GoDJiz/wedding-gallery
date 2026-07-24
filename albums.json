@@ -6,7 +6,7 @@
   },
   "albums": [
     {
-      "id": "default",
+      "id": "pre-wedding",
       "name": "Pre-Wedding",
       "folderUrl": "https://drive.google.com/drive/u/3/folders/1JnvFEPIP77Kg3ef9UFaLQDM6K3ftBs8m",
       "order": 1,
@@ -16,7 +16,7 @@
       "imageCount": 135
     },
     {
-      "id": "album",
+      "id": "wedding-day",
       "name": "Wedding Day",
       "folderUrl": "https://drive.google.com/drive/u/3/folders/10T-qzIqmASYI6OsmEXbEBx_xNnmKNdhz",
       "order": 2,
