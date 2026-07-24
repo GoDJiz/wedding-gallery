@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Admin · Gallery</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="light">
+
+  <!-- ── Password Gate ────────────────────────────────────── -->
+  <div id="password-gate" class="password-gate">
+    <form id="password-form" class="password-card">
+      <div class="logo-mark password-logo">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      </div>
+      <h1>Admin</h1>
+      <p class="password-hint">Enter the admin password to continue.</p>
+      <input id="password-input" type="password" autocomplete="current-password" placeholder="Password" autofocus />
+      <p id="password-error" class="field-error hidden">Incorrect password.</p>
+      <button type="submit" class="btn-primary password-submit">Unlock</button>
+      <a href="index.html" class="password-back">← Back to gallery</a>
+    </form>
+  </div>
+
+  <!-- ── Admin App (hidden until unlocked) ───────────────────── -->
+  <div id="admin-app" class="hidden">
+
+    <header id="app-header">
+      <div class="header-inner">
+        <div class="logo-mark">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
+        <div>
+          <h1 id="gallery-title">Admin</h1>
+          <p id="gallery-subtitle">Gallery settings &amp; albums</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="admin-main">
+
+      <div class="banner banner-demo admin-banner">
+        <span class="banner-icon">💡</span>
+        <div>
+          <p class="banner-title">How saving works</p>
+          <p class="banner-body">
+            This is a static site with no database. <strong>Save</strong> validates each
+            album's Drive folder, previews instantly on this device, and downloads an updated
+            <code>albums.json</code> — replace the file in your repo and redeploy to publish
+            for everyone else.
+          </p>
+        </div>
+      </div>
+
+      <section class="admin-section">
+        <h2 class="admin-section-title">Gallery Settings</h2>
+        <label class="field-label" for="s-title">Wedding Title</label>
+        <input id="s-title" type="text" placeholder="e.g. K&amp;S Wedding Gallery" />
+
+        <label class="field-label" for="s-subtitle">Subtitle</label>
+        <input id="s-subtitle" type="text" placeholder="e.g. Our Wedding Photo Collection" />
+
+        <label class="field-label" for="s-hero">Hero Image URL <span class="field-optional">(optional)</span></label>
+        <input id="s-hero" type="text" placeholder="https://…" />
+      </section>
+
+      <section class="admin-section">
+        <div class="admin-section-header">
+          <h2 class="admin-section-title">Albums</h2>
+          <button id="add-album-btn" type="button" class="btn-secondary">+ Add Album</button>
+        </div>
+
+        <div id="albums-list" class="albums-list"></div>
+        <div id="admin-empty" class="empty-state hidden">
+          <div class="empty-icon" aria-hidden="true">📁</div>
+          <h3>No albums yet</h3>
+          <p>Click "+ Add Album" to create your first one.</p>
+        </div>
+      </section>
+
+      <div class="admin-save-bar">
+        <button id="save-btn" class="btn-primary btn-save">Save</button>
+        <span id="save-status" class="save-status hidden"></span>
+      </div>
+
+      <p class="admin-footer-links">
+        <a href="index.html">← Back to gallery</a>
+        · <button id="discard-btn" type="button" class="link-btn">Discard local preview</button>
+      </p>
+
+    </main>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

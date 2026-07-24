@@ -1,0 +1,20 @@
+{
+  "//": "Managed from /admin. See README.md > 'Multi-Album Admin' before editing this by hand.",
+  "settings": {
+    "title": "",
+    "subtitle": "",
+    "heroImage": ""
+  },
+  "albums": [
+    {
+      "id": "default",
+      "name": "All Photos",
+      "folderUrl": "",
+      "order": 1,
+      "visible": true,
+      "default": true,
+      "cover": null,
+      "imageCount": null
+    }
+  ]
+}

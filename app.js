@@ -167,14 +167,148 @@ async function fetchDriveImages({ folderId, apiKey, pageToken, pageSize, orderBy
 }
 
 // ────────────────────────────────────────────────────────────
-//  Demo images (Picsum — shown when credentials are placeholders)
+//  Gallery config — settings + albums, folder-ID parsing,
+//  multi-folder fetch
+//
+//  Each album maps 1:1 to its own Google Drive folder. albums.json
+//  is the shared source of truth (loaded by every visitor) and
+//  also carries the editable "settings" block (title/subtitle/hero
+//  image). The Admin page (/admin) writes a live-preview copy to
+//  localStorage under GALLERY_CONFIG_OVERRIDE_KEY so changes can be
+//  previewed instantly on the admin's own device before the
+//  updated albums.json is downloaded/committed for everyone else.
+//  See README.md → "Multi-Album Admin" for the full write-up.
 // ────────────────────────────────────────────────────────────
 
-function buildDemoImages() {
+const ALBUMS_URL = 'albums.json';
+const GALLERY_CONFIG_OVERRIDE_KEY = 'lumina-gallery-config-override';
+
+// Accepts a full Drive folder URL or a bare folder ID
+function extractFolderId(input) {
+  if (!input) return null;
+  const trimmed = String(input).trim();
+  const match = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+async function loadGalleryConfig() {
+  let settings = {};
+  let albums   = [];
+
+  try {
+    const res = await fetch(ALBUMS_URL, { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.settings && typeof data.settings === 'object') settings = data.settings;
+      if (Array.isArray(data.albums)) {
+        albums = data.albums.filter(a => a && a.folderUrl && String(a.folderUrl).trim());
+      }
+    }
+  } catch (err) {
+    console.warn('[Lumina] albums.json not found or invalid — falling back to config.js', err);
+  }
+
+  // Backward compatibility: no albums.json (or none of its albums
+  // have a usable folder URL) → single album pointing at the
+  // legacy CONFIG.FOLDER_ID. Gallery then behaves exactly as a
+  // single-album deployment did before.
+  if (!albums.length) {
+    albums = [{
+      id: 'default', name: 'All Photos', folderUrl: CONFIG.FOLDER_ID,
+      order: 1, visible: true, default: true, cover: null,
+    }];
+  }
+
+  // Admin live-preview override (same browser/device only)
+  try {
+    const raw = localStorage.getItem(GALLERY_CONFIG_OVERRIDE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.settings && typeof parsed.settings === 'object') settings = parsed.settings;
+        if (Array.isArray(parsed.albums) && parsed.albums.length) albums = parsed.albums;
+      }
+    }
+  } catch (err) {
+    console.warn('[Lumina] Ignoring corrupt gallery config override in localStorage', err);
+  }
+
+  albums = albums
+    .map(a => ({ ...a, folderId: extractFolderId(a.folderUrl) }))
+    .filter(a => a.folderId)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  return {
+    title:     (settings.title    && String(settings.title).trim())    || CONFIG.GALLERY_TITLE,
+    subtitle:  (settings.subtitle && String(settings.subtitle).trim()) || CONFIG.GALLERY_SUBTITLE,
+    heroImage: (settings.heroImage && String(settings.heroImage).trim()) || null,
+    albums,
+  };
+}
+
+// Loop Drive pagination internally until exhausted — this is the
+// "load everything once" step. Runs once at startup per album.
+async function fetchAllPagesForFolder(album) {
+  let pageToken;
+  const all = [];
+  do {
+    const { files, nextPageToken } = await fetchDriveImages({
+      folderId:  album.folderId,
+      apiKey:    CONFIG.API_KEY,
+      pageToken,
+      pageSize:  CONFIG.PAGE_SIZE,
+      orderBy:   `${CONFIG.DEFAULT_SORT || 'createdTime'} ${CONFIG.DEFAULT_SORT_DIR || 'desc'}`,
+    });
+    files.forEach(f => { f.albumId = album.id; f.albumName = album.name; });
+    all.push(...files);
+    pageToken = nextPageToken;
+  } while (pageToken);
+  return all;
+}
+
+// Fetches every visible album's folder in parallel. A failure in
+// one album's folder (bad ID, permissions) is logged and skipped
+// rather than breaking the whole gallery.
+async function fetchAllAlbumsData(albums) {
+  const visible = albums.filter(a => a.visible !== false);
+  const settled = await Promise.allSettled(visible.map(fetchAllPagesForFolder));
+
+  const images = [];
+  const failures = [];
+  settled.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      images.push(...result.value);
+    } else {
+      failures.push(visible[i].name);
+      console.error(`[Lumina] Failed to load album "${visible[i].name}":`, result.reason);
+    }
+  });
+
+  if (failures.length && images.length === 0) {
+    throw new Error(`Could not load any albums (${failures.join(', ')}). Check folder IDs and sharing settings.`);
+  }
+  return images;
+}
+
+// ────────────────────────────────────────────────────────────
+//  Demo data (Picsum — shown when credentials are placeholders)
+// ────────────────────────────────────────────────────────────
+
+function buildDemoData() {
+  const demoAlbums = [
+    { id: 'ceremony',  name: 'Ceremony',  order: 1, visible: true, default: true },
+    { id: 'reception', name: 'Reception', order: 2, visible: true },
+    { id: 'family',    name: 'Family',    order: 3, visible: true },
+    { id: 'friends',   name: 'Friends',   order: 4, visible: true }, // intentionally empty — demonstrates the empty-album state
+  ];
+  const populatedAlbums = demoAlbums.slice(0, 3); // 'friends' stays empty on purpose
   const topics = ['nature','architecture','travel','city','abstract','food','portrait','ocean','mountain','forest'];
-  return Array.from({ length: 30 }, (_, i) => {
-    const seed = i + 1;
+  const images = Array.from({ length: 40 }, (_, i) => {
+    const seed  = i + 1;
     const topic = topics[i % topics.length];
+    const album = populatedAlbums[i % populatedAlbums.length];
     const w = 800 + (i % 3) * 400;
     const h = 600 + (i % 4) * 150;
     return {
@@ -187,8 +321,13 @@ function buildDemoImages() {
       fullUrl:      `https://picsum.photos/seed/${seed}/${w}/${h}`,
       downloadUrl:  `https://picsum.photos/seed/${seed}/${w}/${h}`,
       size: null, isDemo: true, isHeic: false,
+      albumId: album.id, albumName: album.name,
     };
   });
+  return {
+    title: CONFIG.GALLERY_TITLE, subtitle: CONFIG.GALLERY_SUBTITLE, heroImage: null,
+    albums: demoAlbums, images,
+  };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -370,18 +509,29 @@ function prefetchAdjacentImages(imgs, currentIndex) {
 // ────────────────────────────────────────────────────────────
 
 const state = {
+  // Albums (loaded once at startup; see loadGalleryConfig)
+  albums:          [],
+  albumCounts:     new Map(), // albumId -> photo count, computed once after load
+  selectedAlbumId: 'all',
+
+  // Photos — loaded once at startup, held entirely in memory.
+  // Switching albums / sorting / searching only ever filters
+  // this array; it never triggers a new network request.
   allImages:      [],
-  renderedCount:  0,
-  loading:        false,
+  renderedCount:  0,   // number of <img> cards appended to the DOM so far
+  visibleCount:   0,   // number of already-loaded photos "revealed" via infinite scroll
   initialLoading: true,
   error:          null,
-  hasMore:        true,
-  pageToken:      null,
-  isFetching:     false,
   searchQuery:    '',
   sortBy:         CONFIG.DEFAULT_SORT     || 'createdTime',
   sortDir:        CONFIG.DEFAULT_SORT_DIR || 'desc',
   isDemoMode:     false,
+
+  // Memoizes getFilteredImages() results per (album, search, sort)
+  // combination so switching back to a previously-viewed album/sort
+  // doesn't re-filter and re-sort the same array again. Cleared
+  // only when allImages itself is (re)loaded — see resetFilterCache().
+  filterCache: new Map(),
 
   // Lightbox
   lightboxIndex: null,
@@ -414,6 +564,8 @@ const $ = id => document.getElementById(id);
 const DOM = {
   galleryTitle:    $('gallery-title'),
   gallerySubtitle: $('gallery-subtitle'),
+  heroImage:       $('hero-image'),
+  albumSelector:   $('album-selector'),
   searchInput:     $('search-input'),
   searchClear:     $('search-clear'),
   sortDate:        $('sort-date'),
@@ -429,6 +581,7 @@ const DOM = {
   retryBtn:        $('retry-btn'),
   skeletonGrid:    $('skeleton-grid'),
   emptyState:      $('empty-state'),
+  emptyIcon:       $('empty-icon'),
   emptyTitle:      $('empty-title'),
   emptyBody:       $('empty-body'),
   clearSearchBtn:  $('clear-search-btn'),
@@ -482,8 +635,7 @@ function init() {
     searchTimer = setTimeout(() => {
       state.searchQuery = e.target.value;
       DOM.searchClear.classList.toggle('hidden', !state.searchQuery);
-      state.renderedCount = 0;
-      DOM.galleryGrid.innerHTML = '';
+      resetRenderedGrid();
       renderGallery();
     }, 200);
   });
@@ -496,16 +648,27 @@ function init() {
 
   // Retry
   DOM.retryBtn.addEventListener('click', () => {
-    state.allImages = []; state.renderedCount = 0;
-    state.hasMore = true; state.pageToken = null;
-    DOM.galleryGrid.innerHTML = '';
-    fetchPage(true);
+    state.allImages = [];
+    resetRenderedGrid();
+    bootstrapGallery();
   });
 
-  // Infinite scroll sentinel — created once, never destroyed
+  // URL support: if the user edits ?album=… or #… by hand (or uses
+  // back/forward) while the page is open, follow it. The initial
+  // album on page load is resolved once in finishBootstrap().
+  window.addEventListener('hashchange', syncAlbumFromUrl);
+  window.addEventListener('popstate', syncAlbumFromUrl);
+
+  // Infinite scroll sentinel — created once, never destroyed.
+  // All photos are already loaded in memory; this only reveals
+  // (renders) the next chunk of already-fetched cards. No network
+  // request is made here.
   const sentinelObserver = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting && state.hasMore && !state.isFetching && !state.initialLoading) {
-      fetchPage(false);
+    if (!entries[0].isIntersecting || state.initialLoading) return;
+    const imgs = getFilteredImages();
+    if (state.visibleCount < imgs.length) {
+      state.visibleCount = Math.min(state.visibleCount + CONFIG.PAGE_SIZE, imgs.length);
+      renderGallery();
     }
   }, { rootMargin: '600px', threshold: 0 });
   sentinelObserver.observe(DOM.sentinel);
@@ -557,7 +720,7 @@ function init() {
   window.addEventListener('keydown', onKeyDown);
 
   buildSkeleton();
-  fetchPage(true);
+  bootstrapGallery();
 }
 
 // ────────────────────────────────────────────────────────────
@@ -644,12 +807,20 @@ function onLbTouchEnd(e) {
 //  Helpers
 // ────────────────────────────────────────────────────────────
 
+// Clears rendered DOM cards and resets the chunked-render counters.
+// Used whenever the *filtered set* changes (album, search, sort) —
+// never triggers a network request, since all data is in memory.
+function resetRenderedGrid() {
+  state.renderedCount = 0;
+  state.visibleCount  = 0;
+  DOM.galleryGrid.innerHTML = '';
+}
+
 function clearSearch() {
   state.searchQuery = '';
   DOM.searchInput.value = '';
   DOM.searchClear.classList.add('hidden');
-  state.renderedCount = 0;
-  DOM.galleryGrid.innerHTML = '';
+  resetRenderedGrid();
   renderGallery();
 }
 
@@ -673,14 +844,121 @@ function cycleSort(field) {
   }
   updateSortUI();
 
-  if (!state.isDemoMode) {
-    state.allImages = []; state.renderedCount = 0;
-    state.hasMore = true; state.pageToken = null;
-    DOM.galleryGrid.innerHTML = '';
-    fetchPage(true);
-  } else {
-    state.renderedCount = 0;
-    DOM.galleryGrid.innerHTML = '';
+  // All photos already live in memory — just re-sort and re-render.
+  // No Drive request, no loading state.
+  resetRenderedGrid();
+  renderGallery();
+}
+
+// ────────────────────────────────────────────────────────────
+//  Album Selector
+// ────────────────────────────────────────────────────────────
+
+function renderAlbumSelector() {
+  if (!DOM.albumSelector) return;
+  const visibleAlbums = state.albums.filter(a => a.visible !== false);
+
+  // Backward compatibility: a single-album deployment behaves
+  // exactly as the original single-folder gallery did — no selector.
+  if (visibleAlbums.length <= 1) {
+    DOM.albumSelector.classList.add('hidden');
+    DOM.albumSelector.innerHTML = '';
+    return;
+  }
+
+  DOM.albumSelector.classList.remove('hidden');
+  DOM.albumSelector.innerHTML = '';
+  DOM.albumSelector.setAttribute('role', 'tablist');
+
+  const frag = document.createDocumentFragment();
+  frag.appendChild(makeAlbumChip('all', 'All', state.allImages.length, state.selectedAlbumId === 'all'));
+  visibleAlbums.forEach(a => {
+    const count = state.albumCounts.get(a.id) ?? 0;
+    frag.appendChild(makeAlbumChip(a.id, a.name, count, state.selectedAlbumId === a.id));
+  });
+  DOM.albumSelector.appendChild(frag);
+}
+
+function makeAlbumChip(id, label, count, active) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'album-chip' + (active ? ' active' : '');
+  btn.innerHTML = `${escapeHtml(label)} <span class="album-chip-count">(${count.toLocaleString()})</span>`;
+  btn.setAttribute('role', 'tab');
+  btn.setAttribute('aria-selected', String(active));
+  btn.addEventListener('click', () => selectAlbum(id));
+  return btn;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Switching albums is instant: it only changes which in-memory
+// photos pass the filter in getFilteredImages(). No page reload,
+// no network request, no loading spinner.
+function selectAlbum(id) {
+  if (state.selectedAlbumId === id) return;
+  state.selectedAlbumId = id;
+  resetRenderedGrid();
+  renderAlbumSelector();
+  renderGallery();
+  updateUrlForAlbum(id);
+}
+
+// ────────────────────────────────────────────────────────────
+//  URL support — /?album=<id|name> or /#<id|name>
+// ────────────────────────────────────────────────────────────
+
+function slugify(str) {
+  return String(str).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function albumMatchesToken(album, token) {
+  const t = token.toLowerCase();
+  return album.id.toLowerCase() === t || slugify(album.name) === t;
+}
+
+// Reads ?album=<x> (checked first) or #<x> from the current URL and
+// resolves it to a real, visible album id — or null if there's no
+// (usable) album in the URL.
+function albumIdFromUrl(albums) {
+  const token = new URLSearchParams(location.search).get('album')
+    || (location.hash ? decodeURIComponent(location.hash.slice(1)) : '');
+  if (!token) return null;
+  if (token.toLowerCase() === 'all') return 'all';
+  const match = albums.find(a => a.visible !== false && albumMatchesToken(a, token));
+  return match ? match.id : null;
+}
+
+// URL (if it names a valid album) wins; otherwise the admin-marked
+// default album; otherwise "All".
+function resolveInitialAlbumId(albums) {
+  return albumIdFromUrl(albums)
+    || (albums.find(a => a.visible !== false && a.default) || {}).id
+    || 'all';
+}
+
+// Reflects the current album in the URL (query param) without
+// creating a new history entry per click.
+function updateUrlForAlbum(id) {
+  const url = new URL(location.href);
+  url.hash = '';
+  if (id === 'all') url.searchParams.delete('album');
+  else url.searchParams.set('album', id);
+  history.replaceState(null, '', url.pathname + url.search);
+}
+
+// Re-reads the URL and switches album if it names a different one
+// than what's currently shown (used by the hashchange/popstate
+// listeners set up in init()).
+function syncAlbumFromUrl() {
+  if (!state.albums.length) return;
+  const id = albumIdFromUrl(state.albums);
+  if (id && id !== state.selectedAlbumId) {
+    state.selectedAlbumId = id;
+    resetRenderedGrid();
+    renderAlbumSelector();
     renderGallery();
   }
 }
@@ -703,87 +981,150 @@ function updateSortUI() {
 }
 
 // ────────────────────────────────────────────────────────────
-//  Fetch
+//  Bootstrap — loads albums + every album's photos exactly once
 // ────────────────────────────────────────────────────────────
 
-async function fetchPage(reset = false) {
-  if (state.isFetching) return;
-  if (!reset && !state.hasMore) return;
+async function bootstrapGallery() {
+  state.initialLoading = true;
+  state.error = null;
+  DOM.skeletonGrid.classList.remove('hidden');
+  DOM.galleryGrid.classList.add('hidden');
+  DOM.errorBanner.classList.add('hidden');
 
-  // Demo mode
+  // Demo mode — no Drive calls, no albums.json fetch needed.
   if (isDemoCredentials()) {
-    state.isDemoMode    = true;
-    state.allImages     = buildDemoImages();
-    state.hasMore       = false;
-    state.initialLoading = false;
+    state.isDemoMode = true;
+    const config = buildDemoData();
+    finishBootstrap(config);
     DOM.demoBanner.classList.remove('hidden');
     DOM.demoBadge.classList.remove('hidden');
-    renderGallery();
     return;
   }
 
-  state.isFetching = true;
-  state.error      = null;
-
-  if (reset) {
-    state.initialLoading = true;
-    state.pageToken = null;
-    DOM.skeletonGrid.classList.remove('hidden');
-    DOM.galleryGrid.classList.add('hidden');
-    DOM.errorBanner.classList.add('hidden');
-  } else {
-    state.loading = true;
-    DOM.loadSpinner.classList.remove('hidden');
-  }
-
   try {
-    const { files, nextPageToken } = await fetchDriveImages({
-      folderId:  CONFIG.FOLDER_ID,
-      apiKey:    CONFIG.API_KEY,
-      pageToken: reset ? undefined : state.pageToken,
-      pageSize:  CONFIG.PAGE_SIZE,
-      orderBy:   `${state.sortBy} ${state.sortDir}`,
-    });
-    state.pageToken = nextPageToken;
-    state.allImages = reset ? files : [...state.allImages, ...files];
-    state.hasMore   = !!nextPageToken;
+    const config = await loadGalleryConfig();
+    config.images = await fetchAllAlbumsData(config.albums);
+    finishBootstrap(config);
   } catch (err) {
-    console.error('[Lumina] Fetch error:', err);
-    state.error = err.message || 'Failed to load images. Check your API key and folder ID.';
-    if (reset) state.hasMore = false;
-  } finally {
-    state.loading        = false;
+    console.error('[Lumina] Bootstrap error:', err);
+    state.error = err.message || 'Failed to load images. Check your API key and folder ID(s).';
     state.initialLoading = false;
-    state.isFetching     = false;
-    DOM.loadSpinner.classList.add('hidden');
     DOM.skeletonGrid.classList.add('hidden');
+    renderAlbumSelector();
     renderGallery();
   }
+}
+
+// Applies a fully-loaded {title, subtitle, heroImage, albums, images}
+// config to page state: site settings, album counts, the initial
+// album (URL param/hash > admin-marked default > "All"), and a
+// fresh filter cache — then renders once and kicks off preloading.
+function finishBootstrap(config) {
+  applySiteSettings(config);
+  state.albums    = config.albums;
+  state.allImages = config.images;
+  state.filterCache = new Map();
+  state.albumCounts = computeAlbumCounts(config.albums, config.images);
+  state.selectedAlbumId = resolveInitialAlbumId(config.albums);
+
+  state.initialLoading = false;
+  DOM.skeletonGrid.classList.add('hidden');
+  renderAlbumSelector();
+  renderGallery();
+  preloadFirstImages(config.albums, config.images);
+}
+
+function applySiteSettings({ title, subtitle, heroImage }) {
+  if (title) {
+    document.title = title;
+    DOM.galleryTitle.textContent = title;
+  }
+  if (subtitle) DOM.gallerySubtitle.textContent = subtitle;
+  if (DOM.heroImage) {
+    if (heroImage) {
+      DOM.heroImage.src = heroImage;
+      DOM.heroImage.classList.remove('hidden');
+    } else {
+      DOM.heroImage.classList.add('hidden');
+    }
+  }
+}
+
+function computeAlbumCounts(albums, images) {
+  const counts = new Map(albums.map(a => [a.id, 0]));
+  images.forEach(img => counts.set(img.albumId, (counts.get(img.albumId) || 0) + 1));
+  return counts;
+}
+
+// Warms the browser's image cache with each album's first PAGE_SIZE
+// thumbnails right after startup, so switching into any album feels
+// instant even before the user has scrolled there. Fire-and-forget,
+// low priority — never blocks rendering and makes no Drive calls
+// (thumbnails are already-known URLs from the initial load).
+function preloadFirstImages(albums, images) {
+  const byAlbum = new Map();
+  images.forEach(img => {
+    if (!byAlbum.has(img.albumId)) byAlbum.set(img.albumId, []);
+    const list = byAlbum.get(img.albumId);
+    if (list.length < CONFIG.PAGE_SIZE) list.push(img);
+  });
+
+  const schedule = window.requestIdleCallback || (fn => setTimeout(fn, 200));
+  byAlbum.forEach(list => {
+    list.forEach(img => {
+      schedule(() => { const preload = new Image(); preload.src = img.thumbnailUrl; });
+    });
+  });
 }
 
 // ────────────────────────────────────────────────────────────
 //  Render
 // ────────────────────────────────────────────────────────────
 
+// Filters the in-memory photo set by selected album + search query,
+// then sorts. Everything here is synchronous, in-memory work —
+// switching albums/sort/search never triggers a network request.
+// Filters the in-memory photo set by selected album + search query,
+// then sorts. Everything here is synchronous, in-memory work —
+// switching albums/sort/search never triggers a network request.
+// Results are memoized per (album, search, sort) combination so
+// flipping back to an already-viewed album/sort doesn't re-filter
+// and re-sort the same array again (requirement: cache filtered
+// results). The cache is reset whenever allImages itself changes —
+// see finishBootstrap().
 function getFilteredImages() {
+  const cacheKey = `${state.selectedAlbumId}|${state.searchQuery.trim().toLowerCase()}|${state.sortBy}|${state.sortDir}`;
+  const cached = state.filterCache.get(cacheKey);
+  if (cached) return cached;
+
   let imgs = state.allImages;
+
+  if (state.selectedAlbumId && state.selectedAlbumId !== 'all') {
+    imgs = imgs.filter(img => img.albumId === state.selectedAlbumId);
+  }
+
   if (state.searchQuery.trim()) {
     const q = state.searchQuery.toLowerCase();
     imgs = imgs.filter(img => img.name.toLowerCase().includes(q));
   }
-  if (state.isDemoMode) {
-    const key = state.sortBy === 'name' ? 'name' : state.sortBy;
-    imgs = [...imgs].sort((a, b) => {
-      const cmp = String(a[key] || '').localeCompare(String(b[key] || ''), undefined, { numeric: true });
-      return state.sortDir === 'asc' ? cmp : -cmp;
-    });
-  }
+
+  const key = state.sortBy === 'name' ? 'name' : state.sortBy;
+  imgs = [...imgs].sort((a, b) => {
+    const cmp = String(a[key] || '').localeCompare(String(b[key] || ''), undefined, { numeric: true });
+    return state.sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  state.filterCache.set(cacheKey, imgs);
   return imgs;
 }
 
 function renderGallery() {
-  const imgs = getFilteredImages();
-  DOM.countText.textContent = `${state.allImages.length.toLocaleString()} photo${state.allImages.length !== 1 ? 's' : ''}`;
+  const imgs  = getFilteredImages();
+  const total = state.allImages.length;
+
+  DOM.countText.textContent = (imgs.length === total)
+    ? `${total.toLocaleString()} photo${total !== 1 ? 's' : ''}`
+    : `${imgs.length.toLocaleString()} of ${total.toLocaleString()} photos`;
 
   if (state.error) {
     DOM.errorBanner.classList.remove('hidden');
@@ -795,21 +1136,31 @@ function renderGallery() {
   const isEmpty = !state.initialLoading && !state.error && imgs.length === 0;
   DOM.emptyState.classList.toggle('hidden', !isEmpty);
   if (isEmpty) {
-    DOM.emptyTitle.textContent = state.searchQuery ? 'No photos match your search' : 'No photos found';
-    DOM.emptyBody.textContent  = state.searchQuery
+    const inAlbum = state.selectedAlbumId !== 'all' && !state.searchQuery;
+    DOM.emptyIcon.textContent = state.searchQuery ? '🔍' : '📷';
+    DOM.emptyTitle.textContent = state.searchQuery
+      ? 'No photos match your search'
+      : inAlbum ? 'No photos in this album.' : 'No photos found';
+    DOM.emptyBody.textContent = state.searchQuery
       ? 'Try a different search term.'
+      : inAlbum ? 'Try a different album, or check back later.'
       : 'Make sure your Google Drive folder contains images and is accessible.';
     DOM.clearSearchBtn.classList.toggle('hidden', !state.searchQuery);
   }
 
   if (!state.initialLoading && imgs.length > 0) {
     DOM.galleryGrid.classList.remove('hidden');
-    appendGrid(imgs);
+    // Reveal the first chunk on a fresh filter (album/search/sort
+    // change); infinite scroll then grows visibleCount in-memory.
+    if (state.visibleCount === 0) {
+      state.visibleCount = Math.min(CONFIG.PAGE_SIZE, imgs.length);
+    }
+    appendGrid(imgs, state.visibleCount);
   } else if (!state.initialLoading) {
     DOM.galleryGrid.classList.add('hidden');
   }
 
-  if (!state.hasMore && imgs.length > 0 && !state.loading) {
+  if (imgs.length > 0 && state.visibleCount >= imgs.length) {
     DOM.endNotice.textContent = `✓ All ${imgs.length.toLocaleString()} photos loaded`;
     DOM.endNotice.classList.remove('hidden');
   } else {
@@ -821,10 +1172,11 @@ function renderGallery() {
 //  Grid — append-only (never wipes DOM between pages)
 // ────────────────────────────────────────────────────────────
 
-function appendGrid(images) {
+function appendGrid(images, targetCount) {
   const fragment = document.createDocumentFragment();
+  const limit = Math.min(targetCount ?? images.length, images.length);
 
-  for (let i = state.renderedCount; i < images.length; i++) {
+  for (let i = state.renderedCount; i < limit; i++) {
     const image = images[i];
     const index = i; // capture for closures
 
@@ -860,7 +1212,7 @@ function appendGrid(images) {
   }
 
   DOM.galleryGrid.appendChild(fragment);
-  state.renderedCount = images.length;
+  state.renderedCount = limit;
 }
 
 // ────────────────────────────────────────────────────────────
